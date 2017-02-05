@@ -137,6 +137,28 @@ int avr_mem_hiaddr(AVRMEM * mem)
   return 0;
 }
 
+/*
+ * Detect if the defined memory is a bootloader by locating the first
+ * interesting (non-0xff) byte. This is useful to avoid writing
+ * the whole flash memory from the begining when bootloaders are 
+ * typically only in the last 4k.
+ */
+int avr_mem_loaddr(AVRMEM * mem)
+{
+  int i;
+
+  /* return the lowest non-0xff address regardless of how much
+     memory was read */
+  for (i=0; i<mem->size; i++) {
+    if (mem->buf[i] != 0xff) {
+        return i & (~0u << 1); 
+        // use the nearest even num, since instuctions are 16bits
+    }
+  }
+  // if in doubt, write everything.
+  return 0;
+}
+
 
 /*
  * Read the entirety of the specified memory type into the
@@ -538,6 +560,7 @@ int avr_write(PROGRAMMER * pgm, AVRPART * p, char * memtype, int size,
   int              rc;
   int              wsize;
   long             i;
+  long             start;
   unsigned char    data;
   int              werror;
   AVRMEM         * m;
@@ -566,11 +589,18 @@ int avr_write(PROGRAMMER * pgm, AVRPART * p, char * memtype, int size,
             progbuf, wsize);
   }
 
-  if (pgm->paged_write != NULL && m->page_size != 0) {
+  start = avr_mem_loaddr(m);
+
+  if (pgm->paged_write != NULL && m->page_size != 0 \
+          && start*4 < m->size*3 ) {
     /*
      * the programmer supports a paged mode write, perhaps more
      * efficiently than we can read it directly, so use its routine
-     * instead
+     * instead.
+     *
+     * However, this usually provides a factor-of-4 speedup and must
+     * start at the beginning, so don't apply it when only loading the
+     * last quarter of memory. 
      */
     if ((i = pgm->paged_write(pgm, p, m, m->page_size, size)) >= 0)
       return i;
@@ -580,7 +610,7 @@ int avr_write(PROGRAMMER * pgm, AVRPART * p, char * memtype, int size,
       pgm->write_setup(pgm, p, m);
   }
 
-  for (i=0; i<wsize; i++) {
+  for (i=start; i<wsize; i++) {
     data = m->buf[i];
     report_progress(i, wsize, NULL);
 
